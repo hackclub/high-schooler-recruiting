@@ -12,6 +12,7 @@ require 'mail'
 THREADS = 16
 
 GITHUB_PROFILE_WEBSITE_XPATH = '//*[@id="js-pjax-container"]/div/div[1]/ul/li[4]/a'.freeze
+GITHUB_PROFILE_BIO_SELECTOR = '.user-profile-bio > div'.freeze
 GITHUB_FOLLOWER_LIST_ITEM_SELECTOR = '.follow-list-item'.freeze
 GITHUB_FOLLOWER_LIST_NEXT_ITEM_DISABLED_XPATH = '//*[@id="js-pjax-container"]/div[2]/div[3]/div/span'.freeze
 GITHUB_SOURCE_REPOS_LIST_SELECTOR = '#user-repositories-list .js-repo-list li'.freeze
@@ -51,7 +52,19 @@ def text_of(nokogiri_doc)
   nokogiri_doc.text.gsub("\n", ' ')
 end
 
+def bio_from_github_username(username)
+  doc = doc_from_url(github_url_from_username(username))
+
+  bio = doc.css(GITHUB_PROFILE_BIO_SELECTOR).first
+  return nil unless bio
+
+  bio.text.strip
+end
+
 def likely_high_schooler?(github_username)
+  bio = bio_from_github_username(github_username)
+  return true if bio =~ /high school/i
+
   website_url = website_url_from_github(github_username)
   return false unless website_url
 
