@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+# coding: utf-8
 
 require 'byebug'
 
@@ -21,12 +22,66 @@ GITHUB_SOURCE_REPOS_NEXT_PAGE_DISABLED_XPATH = '//*[@id="user-repositories-list"
 GITHUB_REPO_BRANCHES_DEFAULT_XPATH = '//*[@id="branch-autoload-container"]/div[1]/div[2]/div/span[1]/a'
 GITHUB_COMMITS_COMMIT_ITEM_SELECTOR = '.commit-group > li.commit.commits-list-item'.freeze
 
+module Cache
+  @@store = {}
+  @@mutex = Mutex.new
+
+  def self.set(key, val, expires = nil)
+    expire!
+
+    access_store do |store|
+      store[key] = {
+        val: val,
+        expires: expires
+      }
+    end
+  end
+
+  def self.get(key)
+    expire!
+
+    access_store do |store|
+      stored = store[key]
+      return nil unless stored
+
+      stored[:val]
+    end
+  end
+
+  def self.expire!
+    access_store do |store|
+      to_delete = store.select { |_k, v| v[:expires] < Time.now }
+      to_delete.each { |k, _v| store.delete(k) }
+    end
+  end
+
+  def self.access_store
+    @@mutex.synchronize { yield @@store }
+  end
+end
+
 def open_url(url)
-  open(url, allow_redirections: :all)
-rescue OpenURI::HTTPError => e # Rescue and allow HTTP errors, like a 404
-  Nokogiri::HTML(e.io)
-rescue Net::OpenTimeout
-  nil
+  retries = 3
+
+  begin
+    resp = Cache.get(url) || open(url, allow_redirections: :all, 'User-Agent' => rand(5000).to_s)
+
+    Cache.set(url, resp, Time.now + 30)
+
+    resp
+  rescue OpenURI::HTTPError => e # Rescue and allow HTTP errors, like a 404
+    # If it's because of rate limiting, retry in a second.
+    sleep 1 && retry if e.message.include? '429'
+
+    e.io
+  rescue Net::OpenTimeout, Errno::ECONNREFUSED, OpenSSL::SSL::SSLError
+    if retries > 0
+      retries -= 1
+      retry
+    else
+      nil
+    end
+  end
 end
 
 def doc_from_url(url)
@@ -185,7 +240,7 @@ def raw_commit_patch(username, repo_name, commit_sha)
   Mail::Encodings.value_decode(patch)
 end
 
-def email_from_github_username(username)
+def info_from_github_username(username)
   latest_repo = repos_from_github_username(username).first
   return nil unless latest_repo
 
@@ -198,13 +253,69 @@ def email_from_github_username(username)
   return nil unless latest_patch && !latest_patch.empty?
 
   # Extracted from the "From:" section of the patch file
-  _name, email = latest_patch.match(/^From: (.+)\n? <(.*)>$/).captures
+  match = latest_patch.match(/^From: (.+)\n? <(.*)>$/)
+  return nil unless match
 
-  email
+  match.captures
 end
 
-usernames = []
+def usernames_from_page_of_search_query(query, page = 1)
+  doc = doc_from_url("https://github.com/search?p=#{page}&q=#{query}&type=Users")
 
-usernames.each do |username|
-  puts email_from_github_username(username)
+  user_items = doc.css('.user-list-item')
+
+  # Filter out GitHub orgs. Actual users have a follow button on the right of
+  # their item in the list, so filter out anything that doesn't have a follow
+  # button.
+  actual_users = user_items.select do |user_item|
+    follow_btn = user_item.search('span.follow').first
+
+    !follow_btn.nil?
+  end
+
+  # Extract their usernames
+  usernames = actual_users.map do |user|
+    user.search('.user-list-info > a').first.text
+  end
+
+  next_page_disabled_btn = doc.css('#user_search_results > div.paginate-container > div > span.next_page.disabled').first
+
+  has_next_page = next_page_disabled_btn.nil?
+
+  [usernames, has_next_page]
+end
+
+def usernames_from_search(query)
+  page = 1
+  has_next_page = true
+
+  Enumerator.new do |enum|
+    while has_next_page
+      usernames, has_next_page = usernames_from_page_of_search_query(query, page)
+
+      usernames.each { |u| enum.yield u }
+
+      # Try to be at least somewhat aware of their rate limiting
+      sleep 3
+
+      page += 1
+    end
+  end
+end
+
+puts "Name\tEmail\tGitHub"
+
+pool = Concurrent::FixedThreadPool.new(THREADS)
+semaphore = Mutex.new
+
+usernames_from_search('high+school').each do |username|
+  pool.post do
+    probably_high_schooler = likely_high_schooler? username
+    next unless probably_high_schooler
+
+    name, email = info_from_github_username(username)
+    next unless name && email
+
+    semaphore.synchronize { puts "#{name}\t#{email}\t#{username}" }
+  end
 end
