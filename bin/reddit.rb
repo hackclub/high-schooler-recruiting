@@ -16,14 +16,13 @@ THREADS = 16
 
 SUBREDDIT_LINK = 'https://reddit.com/r/teenagers'
 
-# POSITIVE_SUBREDDITS = ['LearnToProgram', 'programming' ,'golang', 'ruby', 'javascript']
-POSITIVE_SUBREDDITS = ['AskReddit', 'techsupportgore']
+POSITIVE_SUBREDDITS = ['LearnToProgram', 'programming' ,'golang', 'ruby', 'javascript', 'coding', 'compsci', 'dailyprogrammer', 'webdev', 'reverseengineering', 'startups',
+                       'python', 'cpp', 'haskell', 'php', 'lisp', 'perl', 'erlang', 'java', 'c_programming', 'scheme', 'asm', 'c_language', 'scala', 'cplusplus', 'ocaml', 'gamedev',
+                       'rails', 'django', 'databases', 'hacking', 'machinelearning', 'iOSProgramming', 'javahelp', 'learnprogramming', 'learnpython', 'linux', 'web_design', 'web_dev']
 NEXT_LIMIT = 10
 
 def get_top_posts
   doc = doc_from_url(SUBREDDIT_LINK)
-
-  doc.css('.comments').map do |e| e.attributes['href'] end 
 
   filter_doc_for_hrefs(doc, '.comments')
 end
@@ -81,27 +80,42 @@ def doc_from_url(url)
   Nokogiri::HTML(open_url(url))
 end
 
-posts = [get_top_posts[0]]
-
-pool = Concurrent::FixedThreadPool.new(THREADS)
 semaphore = Mutex.new
+pool = Concurrent::FixedThreadPool.new(THREADS)
 
+puts "Starting scrape (#{THREADS} threads)..."
+profiles = []
+posts = get_top_posts
+
+puts 'Getting profiles...'
 for post in posts
-  pool.post do 
-    profiles = get_profile_urls(post)
-
-    pool.post do
-      for profile in profiles
-        subreddits = get_recent_subreddits(profile)
-
-        overlapping = get_overlapping_subreddits(subreddits)
-
-        if overlapping.length > 0
-          semaphore.synchronize { puts profile }
-        end
-      end
-    end
-  end
+  profiles += get_profile_urls(post)
 end
 
-pool.wait_for_termination
+puts "#{profiles.length} profile(s) collected"
+puts 'Getting subreddits...'
+for profile in profiles
+  pool.post {
+    subreddits = get_recent_subreddits(profile)
+
+    overlapping = get_overlapping_subreddits(subreddits)
+
+    if overlapping.length > 0
+      semaphore.synchronize { puts profile }
+    end
+  }
+end
+
+puts "Done"
+
+while true
+end
+
+=begin
+subreddits = get_recent_subreddits('https://reddit.com/u/hcwool')
+overlapping = get_overlapping_subreddits(subreddits)
+
+if overlapping.length > 0
+  puts 'I am an interesting target!'
+end
+=end
