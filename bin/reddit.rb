@@ -12,6 +12,8 @@ require 'nokogiri'
 require 'open-uri'
 require_relative 'cache'
 
+THREADS = 16
+
 SUBREDDIT_LINK = 'https://reddit.com/r/teenagers'
 
 # POSITIVE_SUBREDDITS = ['LearnToProgram', 'programming' ,'golang', 'ruby', 'javascript']
@@ -81,16 +83,25 @@ end
 
 posts = [get_top_posts[0]]
 
+pool = Concurrent::FixedThreadPool.new(THREADS)
+semaphore = Mutex.new
+
 for post in posts
-  profiles = get_profile_urls(post)
+  pool.post do 
+    profiles = get_profile_urls(post)
 
-  for profile in profiles
-    subreddits = get_recent_subreddits(profile)
+    pool.post do
+      for profile in profiles
+        subreddits = get_recent_subreddits(profile)
 
-    overlapping = get_overlapping_subreddits(subreddits)
+        overlapping = get_overlapping_subreddits(subreddits)
 
-    if overlapping.length > 0
-      puts profile
+        if overlapping.length > 0
+          semaphore.synchronize { puts profile }
+        end
+      end
     end
   end
 end
+
+pool.wait_for_termination
