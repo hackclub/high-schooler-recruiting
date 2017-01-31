@@ -84,7 +84,8 @@ semaphore = Mutex.new
 pool = Concurrent::FixedThreadPool.new(THREADS)
 
 puts "Starting scrape (#{THREADS} threads)..."
-profiles = []
+profiles = ['https://reddit.com/u/hcwool']
+
 posts = get_top_posts
 
 puts 'Getting profiles...'
@@ -93,6 +94,7 @@ for post in posts
 end
 
 puts "#{profiles.length} profile(s) collected"
+
 puts 'Getting subreddits...'
 for profile in profiles
   pool.post {
@@ -106,16 +108,11 @@ for profile in profiles
   }
 end
 
+
+while pool.completed_task_count != profiles.length
+  semaphore.synchronize { puts "Pool is still running (#{pool.completed_task_count} V #{profiles.length})..." }
+
+  sleep 10
+end
+
 puts "Done"
-
-while true
-end
-
-=begin
-subreddits = get_recent_subreddits('https://reddit.com/u/hcwool')
-overlapping = get_overlapping_subreddits(subreddits)
-
-if overlapping.length > 0
-  puts 'I am an interesting target!'
-end
-=end
